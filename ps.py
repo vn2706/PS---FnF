@@ -140,36 +140,45 @@ def nav_factor(): st.session_state.current_page = "Factor"
 def nav_master(): st.session_state.current_page = "Master"
 
 # --- HELPERS ---
-def load_file(uploaded_file, sheet_name=None):
+def load_file(uploaded_file):
     uploaded_file.seek(0)
     if uploaded_file.name.endswith('.csv'):
         return pd.read_csv(uploaded_file, encoding='latin1', on_bad_lines='skip')
-    if sheet_name:
-        return pd.read_excel(uploaded_file, sheet_name=sheet_name)
     return pd.read_excel(uploaded_file)
 
 def standardize_id(df, possible_names, report_name):
-    def scrub(val): return re.sub(r'[^a-zA-Z0-9]', '', str(val)).lower()
-    clean_possible = [scrub(p) for p in possible_names]
-    id_indices = [i for i, h in enumerate(df.columns) if scrub(h) in clean_possible]
-    if not id_indices:
-        for i, row in df.head(50).iterrows():
-            found_indices = [idx for idx, val in enumerate(row.values) if scrub(val) in clean_possible]
-            if found_indices:
-                df.columns = [str(v).strip() for v in row.values]
-                df = df.iloc[i+1:].reset_index(drop=True)
-                id_indices = found_indices
+    # Direct normalization map setup
+    df.columns = [str(c).strip() for c in df.columns]
+    
+    match_col = None
+    for name in possible_names:
+        for col in df.columns:
+            if col.lower() == name.lower() or name.lower() in col.lower():
+                match_col = col
                 break
-    if id_indices:
-        df = df.copy()
-        raw_id_series = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
-        
-        # 🔧 Force baseline string match on clean digits
-        df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
+        if match_col:
+            break
             
+    if not match_col:
+        # Fallback structural scan if headers are shifted inside rows
+        for i, row in df.head(10).iterrows():
+            for idx, val in enumerate(row.values):
+                if str(val).strip().lower() in [p.lower() for p in possible_names]:
+                    df.columns = [str(v).strip() for v in row.values]
+                    df = df.iloc[i+1:].reset_index(drop=True)
+                    match_col = str(val).strip()
+                    break
+            if match_col:
+                break
+
+    if match_col:
+        df = df.copy()
+        raw_id_series = df[match_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
+        # Clean prefix and strip down to core raw numbers
+        df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
         return df.dropna(subset=['Base_ID']).reset_index(drop=True)
     else:
-        st.error(f"🚨 Could not locate ID in {report_name}"); st.stop()
+        st.error(f"🚨 Could not locate ID in {report_name}. Checked: {possible_names}"); st.stop()
 
 def find_exact_or_fuzzy_column(df, target_name):
     cleaned_target = str(target_name).strip().lower()
@@ -317,13 +326,13 @@ elif st.session_state.current_page == "Master":
             if st.button("🚀 Run Mapped Master Consolidation", use_container_width=True):
                 with st.spinner("Consolidating structural mapping inputs..."):
                     
+                    # Target specific ID strings arrays for exact matching across layouts
                     df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id', 'FinalSeparationReason'], "Resignation Report")
                     df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id', 'EMPLOYEE NAME'], "HC Report")
                     df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id', 'Supply chain Input'], "NDC Sheet")
 
                     df_master_scaffold = pd.DataFrame({'Base_ID': st.session_state.allowed_ids})
                     
-                    # 🛠️ HARDCODED COLUMN LOOKUPS ACCORDING TO SPECIFICATION TABLE
                     c_name = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYEE NAME')
                     c_type = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYMENT TYPE')
                     c_desig = find_exact_or_fuzzy_column(df_res_raw, 'Designation')
@@ -336,7 +345,6 @@ elif st.session_state.current_page == "Master":
                     c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Supply chain Input')
                     c_reason = find_exact_or_fuzzy_column(df_res_raw, 'FinalSeparationReason')
 
-                    # Extract subsets cleanly
                     hc_slice = df_hc_raw[['Base_ID']].copy()
                     hc_slice['Employee Name'] = df_hc_raw[c_name] if c_name else ""
                     hc_slice['Employee Type'] = df_hc_raw[c_type] if c_type else ""
@@ -358,7 +366,7 @@ elif st.session_state.current_page == "Master":
                         res_slice['Final Approved LWD'] = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce').dt.strftime('%d-%m-%Y').fillna(df_res_raw[c_lwd].astype(str))
                     else: res_slice['Final Approved LWD'] = ""
 
-                    # Tenure Formula: LWD_SF - DOJ + 1
+                    # Tenure Calculations
                     if c_lwd and c_doj:
                         d_lwd_dt = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce')
                         d_doj_dt = pd.to_datetime(df_res_raw[c_doj], dayfirst=True, errors='coerce')
@@ -366,7 +374,6 @@ elif st.session_state.current_page == "Master":
                     else:
                         res_slice['Years(tenure)'] = 0.0
 
-                    # NP Recovery rules valuation mapping
                     if c_recovery_type and c_waived_days:
                         rec_type_lower = df_res_raw[c_recovery_type].astype(str).str.strip().str.lower()
                         raw_days_numeric = pd.to_numeric(df_res_raw[c_waived_days], errors='coerce').fillna(0)
@@ -384,12 +391,11 @@ elif st.session_state.current_page == "Master":
                         ndc_slice['Inventory Recovery'] = 0
                     ndc_slice = ndc_slice.drop_duplicates(subset=['Base_ID'])
 
-                    # Perform quick clean relational left joins
                     merged_df = df_master_scaffold.merge(hc_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(res_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(ndc_slice, on='Base_ID', how='left')
 
-                    # Restore uppercase prefix layout on Employee ID 
+                    # Upper-case matching profile output strings
                     merged_df['Employee ID'] = merged_df['Base_ID'].apply(lambda x: f"P{str(x).upper()}")
                     merged_df['Entity'] = "PPL-PhonePe Limited"
                     merged_df['NP payable'] = ""
@@ -401,7 +407,7 @@ elif st.session_state.current_page == "Master":
 
                     merged_df = merged_df.fillna("")
 
-                    # Map up headers to match target output specification table names precisely
+                    # Align table layout naming structures
                     output_field_mappings = {
                         'Employee Name': 'Name',
                         'Employee Type': 'Employee Type',
