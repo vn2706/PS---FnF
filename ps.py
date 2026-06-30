@@ -164,7 +164,7 @@ def standardize_id(df, possible_names, report_name):
         df = df.copy()
         raw_id_series = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
         
-        # 🔧 REMOVE ALL 'P' / 'P0' PREFIXES NATIVELY TO MATCH BY RAW NUMERIC CHARACTERS ONLY
+        # 🔧 Force baseline string match on clean digits
         df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
             
         return df.dropna(subset=['Base_ID']).reset_index(drop=True)
@@ -183,7 +183,7 @@ def find_exact_or_fuzzy_column(df, target_name):
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.markdown("<h2 style='color:#5E239D; text-align:center;'>🧭 Workspace</h2>", unsafe_allow_html=True)
+    st.sidebar.markdown("<h2 style='color:#5E239D; text-align:center;'>🧭 Workspace</h2>", unsafe_allow_html=True)
     st.button("🏠 Home", on_click=nav_home, use_container_width=True)
     st.button("📊 1. Factor Calculator", on_click=nav_factor, use_container_width=True)
     st.button("📂 2. Master Builder", on_click=nav_master, use_container_width=True)
@@ -198,7 +198,6 @@ st.markdown("<div class='sub-header'>Automated Settlement Calculation & Consolid
 # 🧭 PAGE ROUTING GATEWAY
 # ==========================================
 
-# --- HOME PAGE MODULE ---
 if st.session_state.current_page == "Home":
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
@@ -209,7 +208,6 @@ if st.session_state.current_page == "Home":
         st.markdown("<div class='feature-card'><h3>📂 Consolidator</h3><p>Build Master FnF Reports from mapped resignation, HC and NDC data.</p></div>", unsafe_allow_html=True)
         st.button("Launch Consolidator", on_click=nav_master, use_container_width=True, key="home_master")
 
-# --- MODULE 1: FACTOR CALCULATOR ---
 elif st.session_state.current_page == "Factor":
     st.markdown("### 📊 Step 1: Factor Data Calculator")
     col1, col2 = st.columns(2)
@@ -319,13 +317,13 @@ elif st.session_state.current_page == "Master":
             if st.button("🚀 Run Mapped Master Consolidation", use_container_width=True):
                 with st.spinner("Consolidating structural mapping inputs..."):
                     
-                    df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id'], "Resignation Report")
-                    df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id'], "HC Report")
-                    df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id'], "NDC Sheet")
+                    df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id', 'FinalSeparationReason'], "Resignation Report")
+                    df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id', 'EMPLOYEE NAME'], "HC Report")
+                    df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id', 'Supply chain Input'], "NDC Sheet")
 
-                    # Base scaffolding out of the standardized base codes
                     df_master_scaffold = pd.DataFrame({'Base_ID': st.session_state.allowed_ids})
                     
+                    # 🛠️ HARDCODED COLUMN LOOKUPS ACCORDING TO SPECIFICATION TABLE
                     c_name = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYEE NAME')
                     c_type = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYMENT TYPE')
                     c_desig = find_exact_or_fuzzy_column(df_res_raw, 'Designation')
@@ -336,15 +334,9 @@ elif st.session_state.current_page == "Master":
                     c_recovery_type = find_exact_or_fuzzy_column(df_res_raw, 'Recovery days Type')
                     c_waived_days = find_exact_or_fuzzy_column(df_res_raw, 'NoOfWaivedOffDays')
                     c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Supply chain Input')
-                    if c_ndc_inv is None:
-                        c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Inventory Recovery')
-                        if c_ndc_inv is None: c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Device Recovery')
                     c_reason = find_exact_or_fuzzy_column(df_res_raw, 'FinalSeparationReason')
-                    if c_reason is None:
-                        c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Reason')
-                    if c_reason is None:
-                        c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Separation Reason')
 
+                    # Extract subsets cleanly
                     hc_slice = df_hc_raw[['Base_ID']].copy()
                     hc_slice['Employee Name'] = df_hc_raw[c_name] if c_name else ""
                     hc_slice['Employee Type'] = df_hc_raw[c_type] if c_type else ""
@@ -366,6 +358,7 @@ elif st.session_state.current_page == "Master":
                         res_slice['Final Approved LWD'] = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce').dt.strftime('%d-%m-%Y').fillna(df_res_raw[c_lwd].astype(str))
                     else: res_slice['Final Approved LWD'] = ""
 
+                    # Tenure Formula: LWD_SF - DOJ + 1
                     if c_lwd and c_doj:
                         d_lwd_dt = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce')
                         d_doj_dt = pd.to_datetime(df_res_raw[c_doj], dayfirst=True, errors='coerce')
@@ -373,10 +366,11 @@ elif st.session_state.current_page == "Master":
                     else:
                         res_slice['Years(tenure)'] = 0.0
 
+                    # NP Recovery rules valuation mapping
                     if c_recovery_type and c_waived_days:
                         rec_type_lower = df_res_raw[c_recovery_type].astype(str).str.strip().str.lower()
-                        raw_days_numeric = pd.to_numeric(df_res_raw[c_waived_days], errors='coerce')
-                        res_slice['NP recovery'] = np.where(rec_type_lower.str.contains('waive off', na=False), 0, raw_days_numeric.fillna(df_res_raw[c_waived_days]))
+                        raw_days_numeric = pd.to_numeric(df_res_raw[c_waived_days], errors='coerce').fillna(0)
+                        res_slice['NP recovery'] = np.where(rec_type_lower.str.contains('waive off', na=False), 0, raw_days_numeric)
                     else:
                         res_slice['NP recovery'] = ""
 
@@ -390,14 +384,13 @@ elif st.session_state.current_page == "Master":
                         ndc_slice['Inventory Recovery'] = 0
                     ndc_slice = ndc_slice.drop_duplicates(subset=['Base_ID'])
 
-                    # Perform quick and clean column structural joins
+                    # Perform quick clean relational left joins
                     merged_df = df_master_scaffold.merge(hc_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(res_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(ndc_slice, on='Base_ID', how='left')
 
-                    # 🔧 ADD BACK THE CAPITALIZED "P" PREFIX TO MATCH THE PREVIEW SPECIFICATIONS
+                    # Restore uppercase prefix layout on Employee ID 
                     merged_df['Employee ID'] = merged_df['Base_ID'].apply(lambda x: f"P{str(x).upper()}")
-                    
                     merged_df['Entity'] = "PPL-PhonePe Limited"
                     merged_df['NP payable'] = ""
                     merged_df['Leave Encashment'] = ""
@@ -408,11 +401,34 @@ elif st.session_state.current_page == "Master":
 
                     merged_df = merged_df.fillna("")
 
+                    # Map up headers to match target output specification table names precisely
+                    output_field_mappings = {
+                        'Employee Name': 'Name',
+                        'Employee Type': 'Employee Type',
+                        'Entity': 'Entity',
+                        'Designation': 'Position',
+                        'Department': 'Department',
+                        'Date Of Joining': 'Employment Details Group Date of Joining',
+                        'Resignation Date': 'Resignation Date',
+                        'Final Approved LWD': 'LWD_SF',
+                        'Years(tenure)': 'Years(tenure)',
+                        'NP recovery': 'NP recovery',
+                        'NP payable': 'NP payable',
+                        'Leave Encashment': 'Leave Encashment',
+                        'Onfield Allowance': 'Onfield Allowance',
+                        'IT Asset Recovery': 'IT Asset Recovery',
+                        'Facility Recovery': 'Facility Recovery',
+                        'Inventory Recovery': 'Inventory Recovery',
+                        'Remarks': 'Remarks',
+                        'Reason': 'Reason'
+                    }
+                    merged_df = merged_df.rename(columns=output_field_mappings)
+
                     final_req_cols = [
-                        'Employee ID', 'Employee Name', 'Employee Type', 'Entity', 'Designation', 'Department', 
-                        'Date Of Joining', 'Resignation Date', 'Final Approved LWD', 'Years(tenure)', 
+                        'Employee ID', 'Name', 'Employee Type', 'Reason', 'Entity', 'Position', 'Department', 
+                        'Employment Details Group Date of Joining', 'Resignation Date', 'LWD_SF', 'Years(tenure)', 
                         'NP recovery', 'NP payable', 'Leave Encashment', 'Onfield Allowance', 
-                        'IT Asset Recovery', 'Facility Recovery', 'Inventory Recovery', 'Remarks', 'Reason'
+                        'IT Asset Recovery', 'Facility Recovery', 'Inventory Recovery', 'Remarks'
                     ]
 
                     st.session_state.final_master_df = merged_df[final_req_cols].set_index('Employee ID')
@@ -426,10 +442,10 @@ elif st.session_state.current_page == "Master":
     if st.session_state.get('final_master_df') is not None:
         curr_df = st.session_state.final_master_df.reset_index()
         
-        abs_mask = curr_df['Reason'].astype(str).str.contains('33|absconding|termination|resignation', case=False, na=False)
+        abs_mask = curr_df['Reason'].astype(str).str.contains('33|absconding|termination|resignation', case=False, na=False) if 'Reason' in curr_df.columns else np.zeros(len(curr_df), dtype=bool)
         total_absconding_cases = abs_mask.sum()
         
-        edit_mask = abs_mask & (pd.to_numeric(curr_df['NP recovery'], errors='coerce').fillna(0) == 0)
+        edit_mask = abs_mask & (pd.to_numeric(curr_df['NP recovery'], errors='coerce').fillna(0) == 0) if 'NP recovery' in curr_df.columns else np.zeros(len(curr_df), dtype=bool)
         review_cases_data = curr_df[edit_mask]
         
         if total_absconding_cases > 0 and st.session_state.absconding_decision == 'pending':
@@ -474,7 +490,7 @@ elif st.session_state.current_page == "Master":
             st.markdown("### 📅 Enter Actual DOE Details")
             
             curr_df_with_idx = st.session_state.final_master_df.reset_index()
-            target_mask = curr_df_with_idx['Reason'].astype(str).str.contains('33|absconding|termination|resignation', case=False, na=False) & (pd.to_numeric(curr_df_with_idx['NP recovery'], errors='coerce').fillna(0) == 0)
+            target_mask = curr_df_with_idx['Reason'].astype(str).str.contains('33|absconding|termination|resignation', case=False, na=False) & (pd.to_numeric(curr_df_with_idx['NP recovery'], errors='coerce').fillna(0) == 0) if 'Reason' in curr_df_with_idx.columns else np.zeros(len(curr_df_with_idx), dtype=bool)
             target_employees = curr_df_with_idx[target_mask]
             
             form_dict = {}
@@ -487,7 +503,7 @@ elif st.session_state.current_page == "Master":
                 for _, row in target_employees.iterrows():
                     emp_id = str(row['Employee ID'])
                     actual_doe_val = form_dict.get(emp_id)
-                    lwd_sf_str = str(row['Final Approved LWD']).strip()
+                    lwd_sf_str = str(row['LWD_SF']).strip() if 'LWD_SF' in row else ""
                     
                     actual_doe_dt = pd.to_datetime(actual_doe_val, errors='coerce')
                     res_doe_dt = pd.to_datetime(lwd_sf_str, dayfirst=True, errors='coerce')
