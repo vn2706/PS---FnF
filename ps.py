@@ -553,4 +553,106 @@ elif st.session_state.current_page == "Master":
 
             if run_tax_exemption and f_gratuity and f_hc_2:
                 df_grat = load_file(f_gratuity)
-                df_hc2_raw = load_file(f_hc_
+                df_hc2_raw = load_file(f_hc_2)
+                
+                df_grat.columns = [str(c).strip() for c in df_grat.columns]
+                df_hc2_raw.columns = [str(c).strip() for c in df_hc2_raw.columns]
+                
+                email_col_idx = [i for i, col in enumerate(df_grat.columns) if 'email address' in col.lower()]
+                hc2_email_idx = [i for i, col in enumerate(df_hc2_raw.columns) if 'official email id' in col.lower()]
+                hc2_empid_idx = [i for i, col in enumerate(df_hc2_raw.columns) if 'employee id' in col.lower() or 'user/employee id' in col.lower() or 'employeecode' in col.lower()]
+                
+                if email_col_idx and hc2_email_idx and hc2_empid_idx:
+                    grat_email_col = df_grat.columns[email_col_idx[0]]
+                    hc2_email_col = df_hc2_raw.columns[hc2_email_idx[0]]
+                    hc2_empid_col = df_hc2_raw.columns[hc2_empid_idx[0]]
+                    
+                    hc2_mapping_slice = df_hc2_raw[[hc2_email_col, hc2_empid_col]].dropna(subset=[hc2_email_col])
+                    
+                    # Target and fix lookups for HC Report 2.0 as well if needed
+                    hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].astype(str).str.strip().str.lower()
+                    hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
+                    
+                    hc2_map_dict = dict(zip(hc2_mapping_slice[hc2_email_col].astype(str).str.strip().str.lower(), hc2_mapping_slice[hc2_empid_col]))
+                    
+                    df_grat['lookup'] = df_grat[grat_email_col].astype(str).str.strip().str.lower().map(hc2_map_dict)
+                    
+                    allowed_set = set(str(i) for i in st.session_state.allowed_ids)
+                    df_grat['input_sheet_lookup'] = df_grat['lookup'].apply(lambda x: x if str(x) in allowed_set else '0')
+                    
+                    tax_filtered_data = df_grat[df_grat['input_sheet_lookup'] != '0'].copy()
+                    
+                    if tax_filtered_data.empty:
+                        st.warning("⚠️ No such matching employees found from the present cutoff.")
+                        st.session_state.tax_exemption_df = None
+                        time.sleep(2)
+                    else:
+                        def grab_fuzzy_tax_col(tokens):
+                            for col in tax_filtered_data.columns:
+                                if all(t.lower() in col.lower() for t in tokens):
+                                    return col
+                            return None
+                        
+                        le_flag = grab_fuzzy_tax_col(['availed', 'leave', 'encashment', 'tax'])
+                        grat_flag = grab_fuzzy_tax_col(['availed', 'gratuity', 'tax'])
+                        grat_amt = grab_fuzzy_tax_col(['sum', 'gratuity', 'received'])
+                        le_amt = grab_fuzzy_tax_col(['sum', 'leave', 'encashment', 'received'])
+                        
+                        tax_output_rows = []
+                        for _, row_tax in tax_filtered_data.iterrows():
+                            tax_output_rows.append({
+                                'EMP ID': str(row_tax['input_sheet_lookup']).replace('.0', '').upper(),
+                                'Leave Encashment': str(row_tax[le_flag]) if le_flag else "",
+                                'Gratuity': str(row_tax[grat_flag]) if grat_flag else "",
+                                'Gratuity amount received from the Previous Employers': pd.to_numeric(row_tax[grat_amt], errors='coerce') if grat_amt else 0.0,
+                                'Leave Encashment amount received from the Previous Employers': pd.to_numeric(row_tax[le_amt], errors='coerce') if le_amt else 0.0
+                            })
+                        
+                        st.session_state.tax_exemption_df = pd.DataFrame(tax_output_rows).set_index('EMP ID')
+                    
+                    st.session_state.absconding_decision = 'done'
+                    st.rerun()
+                else:
+                    st.error("🚨 Configuration Error: Key email parameters failed column evaluation logic.")
+            
+            elif skip_tax_exemption:
+                st.session_state.tax_exemption_df = None
+                st.session_state.absconding_decision = 'done'
+                st.rerun()
+
+        else:
+            final_df_clean = st.session_state.final_master_df.copy()
+            if 'Reason' in final_df_clean.columns:
+                final_df_clean = final_df_clean.drop(columns=['Reason'])
+                
+            final = final_df_clean.reset_index()
+            np_final = st.session_state.np_absconding_df
+            tax_final = st.session_state.tax_exemption_df
+            
+            st.success("✅ Consolidation Finished Successfully! Workbook generation locks completed.")
+            st.dataframe(final, use_container_width=True)
+            
+            if np_final is not None:
+                st.markdown("#### 📑 Summary View: NP- Absconding cases Tab")
+                st.dataframe(np_final.reset_index(), use_container_width=True)
+                
+            if tax_final is not None and not tax_final.empty:
+                st.markdown("#### 📑 Summary View: Tax exemption Tab")
+                st.dataframe(tax_final.reset_index(), use_container_width=True)
+            elif tax_final is None:
+                st.info("ℹ️ Note: Tax exemption processing omitted or returned no relevant roster records.")
+            
+            excel_bytes = convert_to_styled_excel(
+                df_main=final_df_clean, 
+                df_np=np_final, 
+                df_tax=tax_final,
+                edited_cells_dict=st.session_state.edited_cells,
+                is_module2=True
+            )
+            
+            st.download_button(
+                label="📥 Download Final Mapped Multi-Tab Master Report", 
+                data=excel_bytes, 
+                file_name="Master_FnF_Report_Calculated.xlsx", 
+                use_container_width=True
+            )
