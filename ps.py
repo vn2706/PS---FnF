@@ -162,10 +162,10 @@ def standardize_id(df, possible_names, report_name):
                 break
     if id_indices:
         df = df.copy()
-        df['Base_ID'] = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
+        raw_id_series = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
         
-        # 🔧 GLOBAL RE-ALIGNMENT FIX: Standardize prefixes for ALL datasets dynamically
-        df['Base_ID'] = df['Base_ID'].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
+        # 🔧 REMOVE ALL 'P' / 'P0' PREFIXES NATIVELY TO MATCH BY RAW NUMERIC CHARACTERS ONLY
+        df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
             
         return df.dropna(subset=['Base_ID']).reset_index(drop=True)
     else:
@@ -323,13 +323,9 @@ elif st.session_state.current_page == "Master":
                     df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id'], "HC Report")
                     df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id'], "NDC Sheet")
 
-                    # ---------------------------------------------------------
-                    # ⚡ HIGH-PERFORMANCE PD.MERGE ENGINES FOR FLATTENING MAPS
-                    # ---------------------------------------------------------
-                    # Create our master scaffold directly out of the base target list
+                    # Base scaffolding out of the standardized base codes
                     df_master_scaffold = pd.DataFrame({'Base_ID': st.session_state.allowed_ids})
                     
-                    # Resolve Target Column Indexes on dataframes safely using original fuzzy lookups
                     c_name = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYEE NAME')
                     c_type = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYMENT TYPE')
                     c_desig = find_exact_or_fuzzy_column(df_res_raw, 'Designation')
@@ -349,7 +345,6 @@ elif st.session_state.current_page == "Master":
                     if c_reason is None:
                         c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Separation Reason')
 
-                    # Prepare individual slices cleanly dropping duplicate keys to avoid record explosion
                     hc_slice = df_hc_raw[['Base_ID']].copy()
                     hc_slice['Employee Name'] = df_hc_raw[c_name] if c_name else ""
                     hc_slice['Employee Type'] = df_hc_raw[c_type] if c_type else ""
@@ -359,7 +354,6 @@ elif st.session_state.current_page == "Master":
                     res_slice['Designation'] = df_res_raw[c_desig] if c_desig else ""
                     res_slice['Department'] = df_res_raw[c_dept] if c_dept else ""
                     
-                    # Safely evaluate and convert date types to clear up presentation formatting
                     if c_doj:
                         res_slice['Date Of Joining'] = pd.to_datetime(df_res_raw[c_doj], dayfirst=True, errors='coerce').dt.strftime('%d-%m-%Y').fillna(df_res_raw[c_doj].astype(str))
                     else: res_slice['Date Of Joining'] = ""
@@ -372,7 +366,6 @@ elif st.session_state.current_page == "Master":
                         res_slice['Final Approved LWD'] = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce').dt.strftime('%d-%m-%Y').fillna(df_res_raw[c_lwd].astype(str))
                     else: res_slice['Final Approved LWD'] = ""
 
-                    # Vectorized Calculation for Years(tenure) Formula
                     if c_lwd and c_doj:
                         d_lwd_dt = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce')
                         d_doj_dt = pd.to_datetime(df_res_raw[c_doj], dayfirst=True, errors='coerce')
@@ -380,7 +373,6 @@ elif st.session_state.current_page == "Master":
                     else:
                         res_slice['Years(tenure)'] = 0.0
 
-                    # Vectorized NP Recovery Evaluation logic
                     if c_recovery_type and c_waived_days:
                         rec_type_lower = df_res_raw[c_recovery_type].astype(str).str.strip().str.lower()
                         raw_days_numeric = pd.to_numeric(df_res_raw[c_waived_days], errors='coerce')
@@ -398,13 +390,14 @@ elif st.session_state.current_page == "Master":
                         ndc_slice['Inventory Recovery'] = 0
                     ndc_slice = ndc_slice.drop_duplicates(subset=['Base_ID'])
 
-                    # Consolidate via rapid relational left-joins
+                    # Perform quick and clean column structural joins
                     merged_df = df_master_scaffold.merge(hc_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(res_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(ndc_slice, on='Base_ID', how='left')
 
-                    # Map up defaults and remaining metrics
-                    merged_df['Employee ID'] = merged_df['Base_ID'].astype(str).str.upper()
+                    # 🔧 ADD BACK THE CAPITALIZED "P" PREFIX TO MATCH THE PREVIEW SPECIFICATIONS
+                    merged_df['Employee ID'] = merged_df['Base_ID'].apply(lambda x: f"P{str(x).upper()}")
+                    
                     merged_df['Entity'] = "PPL-PhonePe Limited"
                     merged_df['NP payable'] = ""
                     merged_df['Leave Encashment'] = ""
@@ -413,7 +406,6 @@ elif st.session_state.current_page == "Master":
                     merged_df['Facility Recovery'] = 0
                     merged_df['Remarks'] = ""
 
-                    # Clean up data structures to strip NaN/Null entries back into blank lines
                     merged_df = merged_df.fillna("")
 
                     final_req_cols = [
@@ -548,7 +540,7 @@ elif st.session_state.current_page == "Master":
                     hc2_mapping_slice = df_hc2_raw[[hc2_email_col, hc2_empid_col]].dropna(subset=[hc2_email_col])
                     
                     hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].astype(str).str.strip().str.lower()
-                    hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
+                    hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].apply(lambda x: x.lstrip('p0') if x.isdigit() else x)
                     
                     hc2_map_dict = dict(zip(hc2_mapping_slice[hc2_email_col].astype(str).str.strip().str.lower(), hc2_mapping_slice[hc2_empid_col]))
                     
@@ -578,7 +570,7 @@ elif st.session_state.current_page == "Master":
                         tax_output_rows = []
                         for _, row_tax in tax_filtered_data.iterrows():
                             tax_output_rows.append({
-                                'EMP ID': str(row_tax['input_sheet_lookup']).replace('.0', '').upper(),
+                                'EMP ID': f"P{str(row_tax['input_sheet_lookup']).replace('.0', '').upper()}",
                                 'Leave Encashment': str(row_tax[le_flag]) if le_flag else "",
                                 'Gratuity': str(row_tax[grat_flag]) if grat_flag else "",
                                 'Gratuity amount received from the Previous Employers': pd.to_numeric(row_tax[grat_amt], errors='coerce') if grat_amt else 0.0,
