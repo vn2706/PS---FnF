@@ -162,13 +162,10 @@ def standardize_id(df, possible_names, report_name):
                 break
     if id_indices:
         df = df.copy()
-        df['Base_ID'] = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-        # Ensure ID text normalization (strip spaces and lowercase)
-        df['Base_ID'] = df['Base_ID'].str.lower()
+        df['Base_ID'] = df.iloc[:, id_indices[0]].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
         
-        # 🔧 SPECIFIC EDGE CASE FIX FOR HC REPORT (Adds missing 'p' prefix if it's purely digits)
-        if report_name == "HC Report":
-            df['Base_ID'] = df['Base_ID'].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
+        # 🔧 GLOBAL RE-ALIGNMENT FIX: Standardize prefixes for ALL datasets dynamically
+        df['Base_ID'] = df['Base_ID'].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
             
         return df.dropna(subset=['Base_ID']).reset_index(drop=True)
     else:
@@ -212,7 +209,7 @@ if st.session_state.current_page == "Home":
         st.markdown("<div class='feature-card'><h3>📂 Consolidator</h3><p>Build Master FnF Reports from mapped resignation, HC and NDC data.</p></div>", unsafe_allow_html=True)
         st.button("Launch Consolidator", on_click=nav_master, use_container_width=True, key="home_master")
 
-# --- MODULE 1: FACTOR CALCULATOR (UPDATED FORMAT MAPPINGS) ---
+# --- MODULE 1: FACTOR CALCULATOR ---
 elif st.session_state.current_page == "Factor":
     st.markdown("### 📊 Step 1: Factor Data Calculator")
     col1, col2 = st.columns(2)
@@ -223,7 +220,6 @@ elif st.session_state.current_page == "Factor":
         if st.button("🔍 Extract & Preview Inputs", use_container_width=True):
             df_ctc = standardize_id(load_file(ctc_file), ['Employee Code', 'Emp ID', 'Employee ID', 'useremployeeid', 'emp code', 'id'], "CTC Report")
             
-            # 🔄 INTEGRATED NEW COLUMN MAPPINGS
             ctc_rename_map = {
                 '|Indicative Base Pay': 'Basic Pay',
                 'O00006|House Rent Allowance': 'HRA Sales',
@@ -323,41 +319,39 @@ elif st.session_state.current_page == "Master":
             if st.button("🚀 Run Mapped Master Consolidation", use_container_width=True):
                 with st.spinner("Consolidating structural mapping inputs..."):
                     
-                    df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id'], "Resignation Report")
-                    df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id'], "HC Report")
+                    df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id', 'FinalSeparationReason'], "Resignation Report")
+                    df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id', 'EMPLOYEE NAME'], "HC Report")
                     df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id'], "NDC Sheet")
 
                     master_rows = []
 
                     for emp_id in st.session_state.allowed_ids:
-                        # Display structural ID in uppercase back on the UI
                         row_data = {'Employee ID': emp_id.upper()}
                         
                         sub_res = df_res_raw[df_res_raw['Base_ID'].astype(str).str.strip() == emp_id]
                         sub_hc = df_hc_raw[df_hc_raw['Base_ID'].astype(str).str.strip() == emp_id]
                         sub_ndc = df_ndc_raw[df_ndc_raw['Base_ID'].astype(str).str.strip() == emp_id]
 
-                        # Designation (優先 check HC report if available, else Resignation)
-                        c_desig_hc = find_exact_or_fuzzy_column(df_hc_raw, 'Designation')
-                        c_desig_res = find_exact_or_fuzzy_column(df_res_raw, 'Designation')
-                        if not sub_hc.empty and c_desig_hc:
-                            row_data['Designation'] = str(sub_hc.iloc[0][c_desig_hc]).strip()
-                        elif not sub_res.empty and c_desig_res:
-                            row_data['Designation'] = str(sub_res.iloc[0][c_desig_res]).strip()
-                        else:
-                            row_data['Designation'] = ""
+                        # Employee Name (From HC Report: EMPLOYEE NAME)
+                        c_name = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYEE NAME')
+                        row_data['Employee Name'] = str(sub_hc.iloc[0][c_name]).strip() if (not sub_hc.empty and c_name) else ""
 
-                        # Department (優先 check HC report if available, else Resignation)
-                        c_dept_hc = find_exact_or_fuzzy_column(df_hc_raw, 'Department')
-                        c_dept_res = find_exact_or_fuzzy_column(df_res_raw, 'Department')
-                        if not sub_hc.empty and c_dept_hc:
-                            row_data['Department'] = str(sub_hc.iloc[0][c_dept_hc]).strip()
-                        elif not sub_res.empty and c_dept_res:
-                            row_data['Department'] = str(sub_res.iloc[0][c_dept_res]).strip()
-                        else:
-                            row_data['Department'] = ""
+                        # Employee Type (From HC Report: EMPLOYMENT TYPE)
+                        c_type = find_exact_or_fuzzy_column(df_hc_raw, 'EMPLOYMENT TYPE')
+                        row_data['Employee Type'] = str(sub_hc.iloc[0][c_type]).strip() if (not sub_hc.empty and c_type) else ""
 
-                        # Date Of Joining
+                        # Entity Default Constant
+                        row_data['Entity'] = "PPL-PhonePe Limited"
+
+                        # Designation / Position (From Resignation Report: Designation)
+                        c_desig = find_exact_or_fuzzy_column(df_res_raw, 'Designation')
+                        row_data['Designation'] = str(sub_res.iloc[0][c_desig]).strip() if (not sub_res.empty and c_desig) else ""
+
+                        # Department (From Resignation Report: Department)
+                        c_dept = find_exact_or_fuzzy_column(df_res_raw, 'Department')
+                        row_data['Department'] = str(sub_res.iloc[0][c_dept]).strip() if (not sub_res.empty and c_dept) else ""
+
+                        # Date Of Joining (From Resignation Report: Date Of Joining)
                         c_doj = find_exact_or_fuzzy_column(df_res_raw, 'Date Of Joining')
                         if not sub_res.empty and c_doj:
                             d_parsed = pd.to_datetime(sub_res.iloc[0][c_doj], dayfirst=True, errors='coerce')
@@ -365,7 +359,7 @@ elif st.session_state.current_page == "Master":
                         else:
                             row_data['Date Of Joining'] = ""
 
-                        # Resignation Date
+                        # Resignation Date (From Resignation Report: Resignation Date)
                         c_rdate = find_exact_or_fuzzy_column(df_res_raw, 'Resignation Date')
                         if not sub_res.empty and c_rdate:
                             d_parsed = pd.to_datetime(sub_res.iloc[0][c_rdate], dayfirst=True, errors='coerce')
@@ -373,7 +367,7 @@ elif st.session_state.current_page == "Master":
                         else:
                             row_data['Resignation Date'] = ""
 
-                        # Final Approved LWD
+                        # Final Approved LWD / LWD_SF (From Resignation Report: Final Approved LWD)
                         c_lwd = find_exact_or_fuzzy_column(df_res_raw, 'Final Approved LWD')
                         if not sub_res.empty and c_lwd:
                             d_parsed = pd.to_datetime(sub_res.iloc[0][c_lwd], dayfirst=True, errors='coerce')
@@ -381,7 +375,7 @@ elif st.session_state.current_page == "Master":
                         else:
                             row_data['Final Approved LWD'] = ""
 
-                        # Years(tenure) Formula
+                        # Years(tenure) Formula Calculation
                         if not sub_res.empty and c_lwd and c_doj:
                             d_lwd_dt = pd.to_datetime(sub_res.iloc[0][c_lwd], dayfirst=True, errors='coerce')
                             d_doj_dt = pd.to_datetime(sub_res.iloc[0][c_doj], dayfirst=True, errors='coerce')
@@ -393,7 +387,7 @@ elif st.session_state.current_page == "Master":
                         else:
                             row_data['Years(tenure)'] = 0.0
 
-                        # NP recovery / NoOfWaivedOffDays
+                        # NP recovery Evaluation (Based on Recovery days Type & NoOfWaivedOffDays)
                         c_recovery_type = find_exact_or_fuzzy_column(df_res_raw, 'Recovery days Type')
                         c_waived_days = find_exact_or_fuzzy_column(df_res_raw, 'NoOfWaivedOffDays')
                         
@@ -403,22 +397,22 @@ elif st.session_state.current_page == "Master":
                             
                             if 'waive off' in rec_type_val:
                                 row_data['NP recovery'] = 0
-                            elif 'recovery' in rec_type_val:
-                                row_data['NP recovery'] = pd.to_numeric(raw_days_val, errors='coerce') if pd.notna(raw_days_val) else raw_days_val
                             else:
                                 row_data['NP recovery'] = pd.to_numeric(raw_days_val, errors='coerce') if pd.notna(raw_days_val) else raw_days_val
                         else:
                             row_data['NP recovery'] = ""
 
+                        # Default Static Columns 
                         row_data['NP payable'] = ""
                         row_data['Leave Encashment'] = ""
                         row_data['Onfield Allowance'] = 0
                         row_data['IT Asset Recovery'] = 0
                         row_data['Facility Recovery'] = 0
 
-                        # Inventory Recovery
-                        c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Inventory Recovery')
-                        if c_ndc_inv is None: c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Device Recovery')
+                        # Inventory Recovery (From NDC Clearance sheet: Supply chain Input)
+                        c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Supply chain Input')
+                        if c_ndc_inv is None:
+                            c_ndc_inv = find_exact_or_fuzzy_column(df_ndc_raw, 'Inventory Recovery')
                         
                         if not sub_ndc.empty and c_ndc_inv:
                             row_data['Inventory Recovery'] = pd.to_numeric(sub_ndc.iloc[0][c_ndc_inv], errors='coerce') if pd.notna(sub_ndc.iloc[0][c_ndc_inv]) else sub_ndc.iloc[0][c_ndc_inv]
@@ -427,8 +421,10 @@ elif st.session_state.current_page == "Master":
 
                         row_data['Remarks'] = ""
 
-                        c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Reason')
-                        if c_reason is None: c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Separation Reason')
+                        # Separation Reason Column Mapping (From Resignation Report: FinalSeparationReason)
+                        c_reason = find_exact_or_fuzzy_column(df_res_raw, 'FinalSeparationReason')
+                        if c_reason is None:
+                            c_reason = find_exact_or_fuzzy_column(df_res_raw, 'Reason')
                         row_data['Reason'] = str(sub_res.iloc[0][c_reason]).strip() if (not sub_res.empty and c_reason) else ""
 
                         master_rows.append(row_data)
@@ -436,9 +432,10 @@ elif st.session_state.current_page == "Master":
                     df_final_master = pd.DataFrame(master_rows)
 
                     final_req_cols = [
-                        'Employee ID', 'Designation', 'Department', 'Date Of Joining', 'Resignation Date',
-                        'Final Approved LWD', 'Years(tenure)', 'NP recovery', 'NP payable', 'Leave Encashment',
-                        'Onfield Allowance', 'IT Asset Recovery', 'Facility Recovery', 'Inventory Recovery', 'Remarks', 'Reason'
+                        'Employee ID', 'Employee Name', 'Employee Type', 'Entity', 'Designation', 'Department', 
+                        'Date Of Joining', 'Resignation Date', 'Final Approved LWD', 'Years(tenure)', 
+                        'NP recovery', 'NP payable', 'Leave Encashment', 'Onfield Allowance', 
+                        'IT Asset Recovery', 'Facility Recovery', 'Inventory Recovery', 'Remarks', 'Reason'
                     ]
 
                     for col in final_req_cols:
@@ -569,7 +566,6 @@ elif st.session_state.current_page == "Master":
                     
                     hc2_mapping_slice = df_hc2_raw[[hc2_email_col, hc2_empid_col]].dropna(subset=[hc2_email_col])
                     
-                    # Target and fix lookups for HC Report 2.0 as well if needed
                     hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].astype(str).str.strip().str.lower()
                     hc2_mapping_slice[hc2_empid_col] = hc2_mapping_slice[hc2_empid_col].apply(lambda x: f"p{x}" if x.isdigit() and not x.startswith('p') else x)
                     
