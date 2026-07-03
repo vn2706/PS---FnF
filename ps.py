@@ -147,7 +147,6 @@ def load_file(uploaded_file):
     return pd.read_excel(uploaded_file)
 
 def standardize_id(df, possible_names, report_name):
-    # Direct normalization map setup
     df.columns = [str(c).strip() for c in df.columns]
     
     match_col = None
@@ -160,7 +159,6 @@ def standardize_id(df, possible_names, report_name):
             break
             
     if not match_col:
-        # Fallback structural scan if headers are shifted inside rows
         for i, row in df.head(10).iterrows():
             for idx, val in enumerate(row.values):
                 if str(val).strip().lower() in [p.lower() for p in possible_names]:
@@ -174,7 +172,6 @@ def standardize_id(df, possible_names, report_name):
     if match_col:
         df = df.copy()
         raw_id_series = df[match_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
-        # Clean prefix and strip down to core raw numbers
         df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
         return df.dropna(subset=['Base_ID']).reset_index(drop=True)
     else:
@@ -277,13 +274,16 @@ elif st.session_state.current_page == "Factor":
         )
         if st.button("✔️ Run Final Calculations", use_container_width=True):
             df = edited.copy()
-            df['Monthly Basic'] = df['Basic Pay'] / 12
-            df['Monthly Consistency'] = df['Consistency Allowance'] / 12
+            
+            # Values are already monthly in CTC report, assigning them directly
+            df['Monthly Basic'] = df['Basic Pay']
+            df['Monthly Consistency'] = df['Consistency Allowance']
+            
             df['Final Basic pay'] = (df['Part A'] * df['Monthly Basic']).round(0)
             df['Final Const. Bonus'] = (df['Part B'] * df['Monthly Consistency']).round(0)
             df['Final HRA'] = np.where(df['HRA Sales'] > 0, (0.05 * (df['Final Basic pay'] + df['Final Const. Bonus'])).round(0), 0)
-            df['Final Sales linked'] = (df['Part C'] * (df['Sales Linked Comm. Master'] / 12)).round(0)
-            df['Final Mobile allowance'] = ((df['Part A'] * df['Mobile Allow Sales Master']) / 12).round(0)
+            df['Final Sales linked'] = (df['Part C'] * df['Sales Linked Comm. Master']).round(0)
+            df['Final Mobile allowance'] = (df['Part A'] * df['Mobile Allow Sales Master']).round(0)
             df['Final Adv. stat bonus'] = np.where(df['Adv Stt Bonus SalesMaster'] > 0, (0.0833 * (df['Final Basic pay'] + df['Final Const. Bonus'])).round(0), 0)
             
             calculated_slice = df[[
@@ -326,7 +326,6 @@ elif st.session_state.current_page == "Master":
             if st.button("🚀 Run Mapped Master Consolidation", use_container_width=True):
                 with st.spinner("Consolidating structural mapping inputs..."):
                     
-                    # Target specific ID strings arrays for exact matching across layouts
                     df_res_raw = standardize_id(load_file(f_res), ['Employee Code', 'Employee ID', 'emp id', 'id', 'FinalSeparationReason'], "Resignation Report")
                     df_hc_raw = standardize_id(load_file(f_hc), ['EMPLOYEECODE', 'Employee ID', 'user/employee id', 'id', 'EMPLOYEE NAME'], "HC Report")
                     df_ndc_raw = standardize_id(load_file(f_ndc), ['Employee ID', 'Employee Code', 'emp id', 'id', 'Supply chain Input'], "NDC Sheet")
@@ -366,7 +365,6 @@ elif st.session_state.current_page == "Master":
                         res_slice['Final Approved LWD'] = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce').dt.strftime('%d-%m-%Y').fillna(df_res_raw[c_lwd].astype(str))
                     else: res_slice['Final Approved LWD'] = ""
 
-                    # Tenure Calculations
                     if c_lwd and c_doj:
                         d_lwd_dt = pd.to_datetime(df_res_raw[c_lwd], dayfirst=True, errors='coerce')
                         d_doj_dt = pd.to_datetime(df_res_raw[c_doj], dayfirst=True, errors='coerce')
@@ -395,7 +393,6 @@ elif st.session_state.current_page == "Master":
                     merged_df = merged_df.merge(res_slice, on='Base_ID', how='left')
                     merged_df = merged_df.merge(ndc_slice, on='Base_ID', how='left')
 
-                    # Upper-case matching profile output strings
                     merged_df['Employee ID'] = merged_df['Base_ID'].apply(lambda x: f"P{str(x).upper()}")
                     merged_df['Entity'] = "PPL-PhonePe Limited"
                     merged_df['NP payable'] = ""
@@ -407,7 +404,6 @@ elif st.session_state.current_page == "Master":
 
                     merged_df = merged_df.fillna("")
 
-                    # Align table layout naming structures
                     output_field_mappings = {
                         'Employee Name': 'Name',
                         'Employee Type': 'Employee Type',
