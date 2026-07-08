@@ -42,7 +42,7 @@ def convert_to_styled_excel(df_main, df_np=None, df_tax=None, edited_cells_dict=
                 else:
                     worksheet_main.write(row_num + 1, col_num, cell_val, cell_format)
 
-        # --- TAB 2: NP- Absconduct cases ---
+        # --- TAB 2: NP- Absconding cases ---
         if df_np is not None and not df_np.empty:
             df_np_reset = df_np.reset_index()
             df_np_reset.to_excel(writer, index=False, sheet_name='NP- Absconding cases')
@@ -224,7 +224,7 @@ elif st.session_state.current_page == "Factor":
         if st.button("🔍 Extract & Preview Inputs", use_container_width=True):
             df_ctc = standardize_id(load_file(ctc_file), ['Employee Code', 'Emp ID', 'Employee ID', 'useremployeeid', 'emp code', 'id'], "CTC Report")
             
-            # UPDATED: Mapping configured perfectly according to user requirements
+            # Integrated target source metrics mapping
             ctc_rename_map = {
                 'Basic Salary - Part A': 'Basic salary',
                 'O00006|House Rent Allowance': 'House Rent Allowance',
@@ -236,7 +236,6 @@ elif st.session_state.current_page == "Factor":
             for old, new in ctc_rename_map.items():
                 if old in df_ctc.columns: df_ctc.rename(columns={old: new}, inplace=True)
             
-            # UPDATED: Slice references updated to prevent mapping breaks
             ctc_req_cols = ['Base_ID', 'Basic salary', 'House Rent Allowance', 'Consistency Allowance Part B', 'Adv Stt Bonus SalesMaster', 'Sales Linked Commission - Part C', 'Mobile Allowance']
             for c in ctc_req_cols:
                 if c not in df_ctc.columns: df_ctc[c] = 0
@@ -277,7 +276,6 @@ elif st.session_state.current_page == "Factor":
         if st.button("✔️ Run Final Calculations", use_container_width=True):
             df = edited.copy()
             
-            # UPDATED: References shifted safely to use updated layout logic parameters
             df['Monthly Basic'] = df['Basic salary']
             df['Monthly Consistency'] = df['Consistency Allowance Part B']
             
