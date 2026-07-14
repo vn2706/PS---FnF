@@ -171,9 +171,12 @@ def standardize_id(df, possible_names, report_name):
 
     if match_col:
         df = df.copy()
-        raw_id_series = df[match_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
-        df['Base_ID'] = raw_id_series.apply(lambda x: x.lstrip('p0') if x and x != 'nan' else x)
-        return df.dropna(subset=['Base_ID']).reset_index(drop=True)
+        raw_id_series = df[match_col]
+        # Fixed: Safely handles floats, integers, true NaNs, and case differences
+        df['Base_ID'] = raw_id_series.apply(
+            lambda x: str(x).replace('.0', '').strip().lower().lstrip('p0') if pd.notna(x) and str(x).strip().lower() != 'nan' else ""
+        )
+        return df[df['Base_ID'] != ""].reset_index(drop=True)
     else:
         st.error(f"🚨 Could not locate ID in {report_name}. Checked: {possible_names}"); st.stop()
 
@@ -607,7 +610,8 @@ elif st.session_state.current_page == "Master":
                 st.session_state.absconding_decision = 'done'
                 st.rerun()
 
-        else:
+        # Fixed: Changed condition from "else:" to catch 'done' and non-pending states clearly
+        elif st.session_state.absconding_decision in ['done', 'tax_popup_stage'] or total_absconding_cases == 0:
             final_df_clean = st.session_state.final_master_df.copy()
             if 'Reason' in final_df_clean.columns:
                 final_df_clean = final_df_clean.drop(columns=['Reason'])
